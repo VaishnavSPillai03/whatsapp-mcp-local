@@ -1,0 +1,13 @@
+# Your WhatsApp data and session credentials.
+# data/auth/ can read your WhatsApp as you — never commit it, never sync it to
+# cloud storage.
+data/
+
+node_modules/
+
+# Backups written by src/setup.js
+*.backup
+
+# OS noise
+.DS_Store
+Thumbs.db
