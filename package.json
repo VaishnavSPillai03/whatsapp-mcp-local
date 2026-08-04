@@ -5,7 +5,7 @@
   "description": "Read-only WhatsApp MCP server that runs entirely on your machine. Gives Claude your chat history as context, with LID address resolution.",
   "license": "MIT",
   "engines": {
-    "node": ">=22.5.0"
+    "node": ">=22.13.0"
   },
   "bin": {
     "whatsapp-mcp-local": "src/setup.js"

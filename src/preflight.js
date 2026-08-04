@@ -9,8 +9,11 @@
  * node:sqlite is what keeps this project free of native build steps, and it only
  * exists on Node 22.5+.
  */
+// node:sqlite landed in 22.5.0 but sat behind --experimental-sqlite until 22.13.0
+// (and 23.4.0 on that line). 22.13 is the first version that runs it unflagged,
+// so that is the real floor — not 22.5.
 const MIN_MAJOR = 22
-const MIN_MINOR = 5
+const MIN_MINOR = 13
 
 export function checkNodeVersion () {
   const [major, minor] = process.versions.node.split('.').map(Number)

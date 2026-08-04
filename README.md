@@ -32,7 +32,8 @@ usual alternatives require MSYS2 and a C toolchain.
 
 ## Requirements
 
-- **Node 22.5 or newer** (24+ recommended). This is the only hard requirement.
+- **Node 22.13 or newer** (24+ recommended). This is the only hard requirement.
+  `node:sqlite` exists from 22.5 but needs `--experimental-sqlite` until 22.13.
 - WhatsApp on your phone, with a free linked-device slot (you get 4).
 
 ## Install
@@ -42,6 +43,13 @@ git clone https://github.com/VaishnavSPillai03/whatsapp-mcp-local.git
 cd whatsapp-mcp-local
 npm install
 ```
+
+> **Windows PowerShell:** if `npm` fails with *"npm.ps1 cannot be loaded because
+> running scripts is disabled on this system"*, that is PowerShell's execution policy
+> blocking npm's shim, not a problem with this project. Use `npm.cmd install` instead,
+> or allow signed scripts once with
+> `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`. Every other command in this
+> README calls `node` directly and is unaffected.
 
 ## 1. Link your WhatsApp
 
@@ -221,7 +229,7 @@ phone.
 ## Testing
 
 ```bash
-npm test
+node test/run.js
 ```
 
 Runs against a throwaway database in your temp directory. It never touches your real
