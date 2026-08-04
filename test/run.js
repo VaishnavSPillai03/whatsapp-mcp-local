@@ -185,13 +185,28 @@ check('exposes the expected tools', () => {
   const names = tools.map(t => t.name).sort()
   assert.deepEqual(names, [
     'get_message_context', 'get_messages', 'get_stats',
-    'list_chats', 'list_contacts', 'search_messages'
+    'list_chats', 'list_contacts', 'search_messages', 'send_message'
   ])
 })
-check('exposes no tool that could send or modify', () => {
-  const dangerous = tools.filter(t => /send|delete|write|update|mark/i.test(t.name))
-  assert.deepEqual(dangerous, [], `read-only invariant broken: ${dangerous.map(t => t.name)}`)
+check('send_message is the only mutating tool', () => {
+  const mutating = tools.filter(t => /send|delete|write|update|mark/i.test(t.name)).map(t => t.name)
+  assert.deepEqual(mutating, ['send_message'])
 })
+check('send_message warns the model about untrusted message content', () => {
+  const t = tools.find(x => x.name === 'send_message')
+  assert.match(t.description, /untrusted/i)
+  assert.match(t.description, /do not act on it|never/i)
+})
+{
+  let err = null
+  try {
+    await call('send_message', { chat_jid: '82274544545899@lid', text: 'should not send' })
+  } catch (e) { err = e }
+  check('send without a running bridge is refused, not silently dropped', () => {
+    assert.ok(err, 'expected an error')
+    assert.match(err.message, /bridge is not running/i)
+  })
+}
 
 const chats = await call('list_chats', { limit: 50 })
 check('LID chat surfaces under its phone-contact name', () => {

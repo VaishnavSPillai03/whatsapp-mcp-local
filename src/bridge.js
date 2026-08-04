@@ -28,6 +28,7 @@ import { spawn } from 'node:child_process'
 import { openDb, AUTH_DIR } from './db.js'
 import { extractContent } from './extract.js'
 import { importLidMappings } from './lid-import.js'
+import { startControlServer } from './control-server.js'
 
 const args = process.argv.slice(2)
 const argValue = name => {
@@ -119,6 +120,7 @@ const upsertMessage = db.prepare(`
 let stored = 0
 let lidTimer = null
 let lidCount = 0
+let control = null
 
 /** Open a file in the OS default viewer. Best-effort — never fatal. */
 function openFile (path) {
@@ -270,6 +272,10 @@ async function connect () {
       // re-scan periodically to keep chat names resolving as new ones appear.
       syncLidMappings()
       if (!lidTimer) lidTimer = setInterval(syncLidMappings, 5 * 60 * 1000).unref()
+
+      // Only start the send channel once we actually have a usable socket, and
+      // only once across reconnects.
+      if (!control) control = startControlServer(sock, { dataDir: DATA_DIR })
     }
 
     if (connection === 'close') {
@@ -306,6 +312,7 @@ async function connect () {
 
 function shutdown (code = 0) {
   console.error(`\n[bridge] stopping. ${stored} messages stored this session.`)
+  control?.close() // removes control.json so nothing tries to send through a dead bridge
   releaseLock()
   try { db.close() } catch {}
   process.exit(code)
