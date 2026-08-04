@@ -121,6 +121,9 @@ let stored = 0
 let lidTimer = null
 let lidCount = 0
 let control = null
+// Replaced on every reconnect. The control server reads this through a getter so
+// it always sends on the live socket rather than one captured at startup.
+let currentSock = null
 
 /** Open a file in the OS default viewer. Best-effort — never fatal. */
 function openFile (path) {
@@ -216,6 +219,7 @@ async function connect () {
     generateHighQualityLinkPreview: false
   })
 
+  currentSock = sock
   sock.ev.on('creds.update', saveCreds)
 
   // Pairing code replaces QR entirely: WhatsApp shows a field to type it into.
@@ -273,12 +277,13 @@ async function connect () {
       syncLidMappings()
       if (!lidTimer) lidTimer = setInterval(syncLidMappings, 5 * 60 * 1000).unref()
 
-      // Only start the send channel once we actually have a usable socket, and
-      // only once across reconnects.
-      if (!control) control = startControlServer(sock, { dataDir: DATA_DIR })
+      // One listener for the process lifetime; it resolves the live socket per
+      // request, so reconnects don't strand it on a dead one.
+      if (!control) control = startControlServer(() => currentSock, { dataDir: DATA_DIR })
     }
 
     if (connection === 'close') {
+      currentSock = null // sends get a clear 503 rather than failing on a dead socket
       // Baileys surfaces Boom errors, so the status code hangs off .output.
       const status = lastDisconnect?.error?.output?.statusCode
       if (status === DisconnectReason.loggedOut) {

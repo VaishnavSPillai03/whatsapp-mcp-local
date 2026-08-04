@@ -16,11 +16,23 @@ import { writeFileSync, appendFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
 // Runaway protection. A loop that somehow reaches this endpoint should hit a wall
-// long before WhatsApp's spam detection does.
-const MAX_PER_MINUTE = 20
-const MIN_GAP_MS = 1000
+// long before WhatsApp's spam detection does. Overridable so tests can fire
+// requests back to back.
+const DEFAULT_MAX_PER_MINUTE = 20
+const DEFAULT_MIN_GAP_MS = 1000
 
-export function startControlServer (sock, { dataDir, logger = console }) {
+/**
+ * @param getSocket - returns the CURRENT socket. Must be a getter, not a socket:
+ *   Baileys replaces the socket object on every reconnect, and reconnects are
+ *   routine. Holding a reference captured at startup means every send after the
+ *   first disconnect fails with "Connection Closed" until the process restarts.
+ */
+export function startControlServer (getSocket, {
+  dataDir,
+  logger = console,
+  maxPerMinute = DEFAULT_MAX_PER_MINUTE,
+  minGapMs = DEFAULT_MIN_GAP_MS
+}) {
   const controlPath = join(dataDir, 'control.json')
   const auditPath = join(dataDir, 'sent.log')
   const token = randomBytes(32).toString('hex')
@@ -31,10 +43,10 @@ export function startControlServer (sock, { dataDir, logger = console }) {
   function rateLimit () {
     const now = Date.now()
     while (recent.length && now - recent[0] > 60_000) recent.shift()
-    if (recent.length >= MAX_PER_MINUTE) {
-      return `rate limit: ${MAX_PER_MINUTE} messages/minute reached`
+    if (recent.length >= maxPerMinute) {
+      return `rate limit: ${maxPerMinute} messages/minute reached`
     }
-    if (now - lastSend < MIN_GAP_MS) return 'rate limit: sending too fast, retry in a moment'
+    if (now - lastSend < minGapMs) return 'rate limit: sending too fast, retry in a moment'
     return null
   }
 
@@ -66,6 +78,9 @@ export function startControlServer (sock, { dataDir, logger = console }) {
 
     const limited = rateLimit()
     if (limited) return reply(429, { error: limited })
+
+    const sock = getSocket()
+    if (!sock) return reply(503, { error: 'bridge is not connected to WhatsApp right now - retry shortly' })
 
     try {
       const sent = await sock.sendMessage(to, { text })

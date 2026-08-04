@@ -1,7 +1,11 @@
 # Your WhatsApp data and session credentials.
-# data/auth/ can read your WhatsApp as you — never commit it, never sync it to
+# data/auth/ can read and send as you — never commit it, never sync it to
 # cloud storage.
 data/
+
+# Ad-hoc outreach scripts. These embed real names and phone numbers, so they must
+# never reach a public repo.
+outreach/
 
 node_modules/
 

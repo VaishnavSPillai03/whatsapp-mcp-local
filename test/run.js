@@ -5,7 +5,7 @@
  *   node test/run.js
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -282,6 +282,88 @@ check('stats report the seeded totals', () => {
 let threw = false
 try { await call('get_messages', { chat_jid: 'x@lid', before_time: 'not-a-date' }) } catch { threw = true }
 check('invalid date is reported as an error, not a crash', () => assert.equal(threw, true))
+
+// ------------------------------------------------- control server (sending)
+
+console.log('\ncontrol server')
+{
+  const { startControlServer } = await import('../src/control-server.js')
+
+  // Stands in for Baileys: the socket object is REPLACED on every reconnect, which
+  // is what broke sending when the server captured it once at startup.
+  let liveSocket = { sendMessage: async () => ({ key: { id: 'FIRST' } }) }
+  const ctl = startControlServer(() => liveSocket, {
+    dataDir: TMP,
+    logger: { error () {} },
+    minGapMs: 0 // fire assertions back to back; pacing is verified separately
+  })
+
+  await new Promise(r => setTimeout(r, 150))
+  const { port, token } = JSON.parse(readFileSync(join(TMP, 'control.json'), 'utf8'))
+  const post = (body, tok = token) => fetch(`http://127.0.0.1:${port}/send`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${tok}` },
+    body: JSON.stringify(body)
+  })
+
+  const good = await post({ to: 'x@lid', text: 'hello' })
+  check('accepts a valid send', () => assert.equal(good.status, 200))
+
+  const unauth = await post({ to: 'x@lid', text: 'hi' }, 'wrong-token')
+  check('rejects a bad token', () => assert.equal(unauth.status, 401))
+
+  const badJid = await post({ to: 'nope', text: 'hi' })
+  check('rejects a malformed jid', () => assert.equal(badJid.status, 400))
+
+  const empty = await post({ to: 'x@lid', text: '   ' })
+  check('rejects empty text', () => assert.equal(empty.status, 400))
+
+  // The regression: after a reconnect Baileys hands back a NEW socket object.
+  liveSocket = { sendMessage: async () => ({ key: { id: 'SECOND' } }) }
+  const afterReconnect = await post({ to: 'x@lid', text: 'after reconnect' })
+  const body = await afterReconnect.json()
+  check('still sends after the socket is replaced (reconnect)', () => {
+    assert.equal(afterReconnect.status, 200)
+    assert.equal(body.id, 'SECOND', 'used a stale socket captured at startup')
+  })
+
+  liveSocket = null
+  const disconnected = await post({ to: 'x@lid', text: 'while down' })
+  check('returns 503 while disconnected rather than a confusing failure', () => {
+    assert.equal(disconnected.status, 503)
+  })
+
+  ctl.close()
+  await new Promise(r => setTimeout(r, 50))
+}
+
+// Pacing is a separate concern from the socket handling above, so it gets its own
+// server with production-like limits.
+{
+  const { startControlServer } = await import('../src/control-server.js')
+  const dir = join(TMP, 'ratelimit')
+  mkdirSync(dir, { recursive: true })
+  const ctl = startControlServer(() => ({ sendMessage: async () => ({ key: { id: 'X' } }) }), {
+    dataDir: dir, logger: { error () {} }, minGapMs: 5000
+  })
+  await new Promise(r => setTimeout(r, 150))
+  const { port, token } = JSON.parse(readFileSync(join(dir, 'control.json'), 'utf8'))
+  const post = () => fetch(`http://127.0.0.1:${port}/send`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ to: 'x@lid', text: 'burst' })
+  })
+
+  const first = await post()
+  const second = await post()
+  check('throttles a burst instead of blasting messages', () => {
+    assert.equal(first.status, 200)
+    assert.equal(second.status, 429)
+  })
+
+  ctl.close()
+  await new Promise(r => setTimeout(r, 50))
+}
 
 // ---------------------------------------------------------------- teardown
 
