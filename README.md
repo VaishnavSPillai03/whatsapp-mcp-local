@@ -144,6 +144,25 @@ possible but slow.
 | `get_stats` | Store size and date range — confirms the bridge is syncing |
 | `send_message` | Send a text message — requires the bridge to be running; audited |
 
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `node src/bridge.js` | Link and sync. Long-running — leave it open. `Ctrl+C` to stop. |
+| `node src/bridge.js --reset` | Clear the saved session and link again from scratch |
+| `node src/bridge.js --no-open` | Don't auto-open `data/qr.png` (headless machines) |
+| `node src/bridge.js --phone <number>` | Pair by number instead of QR — **currently broken upstream**, see linking troubleshooting |
+| `node src/setup.js` | Show the config for this machine and where it would go; changes nothing |
+| `node src/setup.js --write` | Write the project-scoped config (backs up any existing file) |
+| `node src/setup.js --print` | Print just the JSON block, to paste somewhere yourself |
+| `node src/stats.js` | Store size, date range, name-resolution coverage |
+| `node src/lid-import.js` | Re-read LID mappings by hand (the bridge does this automatically) |
+| `node test/run.js` | Test suite — runs against a temp database, never your real store |
+
+The bridge must be running for new messages to arrive and for `send_message` to
+work. The MCP server reads whatever is already in the database, so Claude still
+answers when the bridge is stopped — just without anything newer.
+
 ## How it works
 
 Two processes, deliberately separate:
