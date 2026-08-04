@@ -21,7 +21,7 @@ import {
 import qrcode from 'qrcode-terminal'
 import QR from 'qrcode'
 import pino from 'pino'
-import { rmSync } from 'node:fs'
+import { rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 
@@ -48,7 +48,47 @@ if (args.includes('--reset')) {
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'silent' })
 const db = openDb()
-const QR_PNG = join(AUTH_DIR, '..', 'qr.png')
+const DATA_DIR = join(AUTH_DIR, '..')
+const QR_PNG = join(DATA_DIR, 'qr.png')
+const LOCK = join(DATA_DIR, 'bridge.lock')
+
+/*
+ * Only one bridge at a time. Two instances share one WhatsApp session and one
+ * database: they fight over the socket, and a session conflict can log the
+ * device out entirely. Easy mistake to make - the bridge is meant to be left
+ * running, so it is not obvious one is already up.
+ */
+function claimLock () {
+  if (existsSync(LOCK)) {
+    const pid = Number(readFileSync(LOCK, 'utf8').trim())
+    let alive = false
+    try {
+      process.kill(pid, 0) // signal 0 tests existence without touching the process
+      alive = true
+    } catch {
+      alive = false // stale lock from a crash or hard kill
+    }
+    if (alive && pid !== process.pid) {
+      console.error(`[bridge] already running as PID ${pid}.`)
+      console.error('[bridge] stop it first, or delete data/bridge.lock if that process is gone.')
+      process.exit(1)
+    }
+    console.error('[bridge] clearing a stale lock from a previous run')
+  }
+  writeFileSync(LOCK, String(process.pid))
+}
+
+function releaseLock () {
+  try {
+    if (existsSync(LOCK) && Number(readFileSync(LOCK, 'utf8').trim()) === process.pid) {
+      rmSync(LOCK, { force: true })
+    }
+  } catch {
+    // Losing the lock file on exit is harmless - the PID check handles staleness.
+  }
+}
+
+claimLock()
 
 const upsertChat = db.prepare(`
   INSERT INTO chats (jid, name, is_group, last_message_time)
@@ -264,13 +304,19 @@ async function connect () {
   sock.ev.on('contacts.update', cs => cs.forEach(saveContact))
 }
 
-process.on('SIGINT', () => {
+function shutdown (code = 0) {
   console.error(`\n[bridge] stopping. ${stored} messages stored this session.`)
-  db.close()
-  process.exit(0)
-})
+  releaseLock()
+  try { db.close() } catch {}
+  process.exit(code)
+}
+
+process.on('SIGINT', () => shutdown(0))
+process.on('SIGTERM', () => shutdown(0))
+process.on('exit', releaseLock)
 
 connect().catch(err => {
   console.error('[bridge] fatal:', err)
+  releaseLock()
   process.exit(1)
 })

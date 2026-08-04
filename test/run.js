@@ -2,9 +2,9 @@
  * Test suite. Runs against a throwaway database in the OS temp directory —
  * it never reads or writes your real store.
  *
- *   npm test
+ *   node test/run.js
  */
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
@@ -31,6 +31,41 @@ function check (name, fn) {
     console.log(`  FAIL ${name}\n       ${err.message}`)
   }
 }
+
+// ------------------------------------------------- first-run (empty store)
+
+// Everything here runs against a store that has never been synced, which is what
+// a new user sees before linking. It must not look like a crash.
+console.log('\nfirst run, nothing synced yet')
+
+const emptyDir = join(TMP, 'empty')
+const emptyEnv = {
+  ...process.env,
+  WHATSAPP_MCP_DB: join(emptyDir, 'store.db'),
+  WHATSAPP_MCP_AUTH: join(emptyDir, 'auth')
+}
+const runScript = script => {
+  const r = spawnSync(process.execPath, [join(ROOT, 'src', script)], {
+    env: emptyEnv, encoding: 'utf8'
+  })
+  return `${r.stdout}${r.stderr}`
+}
+
+const statsOut = runScript('stats.js')
+check('stats.js prints no NaN on an empty store', () => {
+  assert.ok(!/NaN/.test(statsOut), `got: ${statsOut}`)
+})
+check('stats.js prints no raw null on an empty store', () => {
+  assert.ok(!/\bnull\b/.test(statsOut), `got: ${statsOut}`)
+})
+check('stats.js explains what to do next', () => {
+  assert.match(statsOut, /bridge\.js/)
+})
+
+const lidOut = runScript('lid-import.js')
+check('lid-import survives a missing auth folder', () => {
+  assert.match(lidOut, /scanned 0 mapping files/)
+})
 
 // ---------------------------------------------------------------- fixtures
 

@@ -244,13 +244,19 @@ server.registerTool(
              (SELECT MIN(timestamp) FROM messages) AS oldest,
              (SELECT MAX(timestamp) FROM messages) AS newest
     `).get()
-    return ok({
+    const out = {
       messages: s.messages,
       chats: s.chats,
       contacts: s.contacts,
       oldest_message: fmtTime(s.oldest),
       newest_message: fmtTime(s.newest)
-    })
+    }
+    // Without this an unsynced store looks identical to "you have no chats",
+    // and the model reports that back as fact.
+    if (s.messages === 0) {
+      out.status = 'The local store is empty. The bridge (src/bridge.js) has either not been run and linked to WhatsApp yet, or is still performing its first history sync. This does not mean the user has no messages.'
+    }
+    return ok(out)
   }
 )
 

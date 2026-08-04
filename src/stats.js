@@ -30,6 +30,23 @@ console.log(`contacts          ${t.contacts}`)
 console.log(`lid<->pn pairs    ${t.lid_pairs}`)
 console.log(`resolvable names  ${t.resolvable_names}`)
 console.log(`history           ${d(t.oldest)} .. ${d(t.newest)}`)
-console.log(`chats named       ${named.named}/${named.total} (${Math.round(named.named / named.total * 100)}%)`)
+
+// SUM() over zero rows is NULL and x/0 is NaN, so an unsynced store used to print
+// "null/0 (NaN%)" here - which reads like a crash on the very first run.
+if (named.total > 0) {
+  console.log(`chats named       ${named.named ?? 0}/${named.total} (${Math.round((named.named ?? 0) / named.total * 100)}%)`)
+} else {
+  console.log('chats named       -')
+}
+
+if (t.messages === 0) {
+  console.log(`
+Nothing stored yet. If you have not linked your account:
+
+  node src/bridge.js
+
+If the bridge is already running, the first history sync can take a few
+minutes before messages appear.`)
+}
 
 db.close()
