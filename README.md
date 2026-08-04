@@ -38,7 +38,7 @@ usual alternatives require MSYS2 and a C toolchain.
 ## Install
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/whatsapp-mcp-local.git
+git clone https://github.com/VaishnavSPillai03/whatsapp-mcp-local.git
 cd whatsapp-mcp-local
 npm install
 ```
