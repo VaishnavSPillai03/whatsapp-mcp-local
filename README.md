@@ -163,6 +163,25 @@ The bridge must be running for new messages to arrive and for `send_message` to
 work. The MCP server reads whatever is already in the database, so Claude still
 answers when the bridge is stopped — just without anything newer.
 
+### Getting rid of the terminal window (Windows)
+
+`node src/bridge.js` keeps a console window open for as long as it runs, which is
+what most people notice first. Two scripts in the project root fix that:
+
+| File | What it does |
+| --- | --- |
+| `start-bridge-hidden.vbs` | Double-click to run the bridge with **no window at all** |
+| `stop-bridge.vbs` | Double-click to stop it |
+
+Output still goes to `data/bridge-run.log` and `data/bridge-run.log.err`, so you can
+check on it with `node src/stats.js` — a recent `newest_message` means it is alive.
+
+**To start it automatically at login:** press `Win+R`, type `shell:startup`, and put a
+shortcut to `start-bridge-hidden.vbs` in the folder that opens. After that it runs from
+boot and you never think about it again.
+
+On macOS or Linux, `nohup node src/bridge.js > bridge.log 2>&1 &` does the same job.
+
 ## How it works
 
 Two processes, deliberately separate:
