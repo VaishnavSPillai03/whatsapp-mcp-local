@@ -90,9 +90,9 @@ SELECT jid, name FROM (
  * the MCP server calls it before opening read-only, since sqlite can't open a
  * missing file in read-only mode.
  */
-export function ensureSchema () {
-  mkdirSync(dirname(DB_PATH), { recursive: true })
-  const db = new DatabaseSync(DB_PATH)
+export function ensureSchema (path = DB_PATH) {
+  mkdirSync(dirname(path), { recursive: true })
+  const db = new DatabaseSync(path)
   db.exec('PRAGMA journal_mode = WAL')
   db.exec(SCHEMA)
   // Dropped and recreated so the definition tracks this file rather than whatever
@@ -102,9 +102,14 @@ export function ensureSchema () {
   db.close()
 }
 
-export function openDb ({ readOnly = false } = {}) {
-  ensureSchema()
-  const db = new DatabaseSync(DB_PATH, { readOnly })
+/**
+ * @param path - defaults to the configured store. Given explicitly, opens that
+ *   file instead, which is how the tests work against a throwaway copy rather
+ *   than the real database.
+ */
+export function openDb ({ readOnly = false, path = DB_PATH } = {}) {
+  ensureSchema(path)
+  const db = new DatabaseSync(path, { readOnly })
   // WAL lets the MCP server read while the bridge is mid-write.
   if (!readOnly) db.exec('PRAGMA journal_mode = WAL')
   db.exec('PRAGMA busy_timeout = 5000')
