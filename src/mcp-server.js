@@ -30,6 +30,23 @@ const CONTROL_PATH = join(dirname(DB_PATH), 'control.json')
 
 const server = new McpServer({ name: 'whatsapp-local', version: '1.0.0' })
 
+/**
+ * Read-only mode: WHATSAPP_MCP_READONLY=1 registers the search and read tools
+ * and nothing else — no sending, no deleting.
+ *
+ * The reason this exists is exposure. A client reached over OpenAI's Secure MCP
+ * Tunnel, or any setup where a second model is driving these tools, should not
+ * be able to send messages as you or delete your history. The guardrails on the
+ * mutating tools are instructions to a model, not something the code enforces;
+ * withholding the tools entirely is the part the code *can* enforce.
+ */
+const READ_ONLY = /^(1|true|yes)$/i.test(process.env.WHATSAPP_MCP_READONLY ?? '')
+
+/** Registers a tool that changes something — skipped entirely in read-only mode. */
+const registerMutating = (...args) => { if (!READ_ONLY) server.registerTool(...args) }
+
+if (READ_ONLY) console.error('[mcp] read-only mode: send and delete tools are not registered')
+
 const ok = data => ({ content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] })
 
 /**
@@ -243,7 +260,7 @@ server.registerTool(
   }
 )
 
-server.registerTool(
+registerMutating(
   'send_message',
   {
     title: 'Send a WhatsApp message',
@@ -357,7 +374,7 @@ const chatName = jid =>
   db.prepare(`SELECT ${CHAT_NAME_SQL} AS name FROM chats ${CHAT_NAME_JOIN} WHERE chats.jid = ?`)
     .get(jid)?.name || jid
 
-server.registerTool(
+registerMutating(
   'delete_message_for_everyone',
   {
     title: 'Delete a message for everyone (unsend)',
@@ -393,7 +410,7 @@ server.registerTool(
   }
 )
 
-server.registerTool(
+registerMutating(
   'delete_message_for_me',
   {
     title: 'Delete a message from your devices only',
@@ -423,7 +440,7 @@ server.registerTool(
   }
 )
 
-server.registerTool(
+registerMutating(
   'clear_chat_history',
   {
     title: 'Clear every message in a chat, on WhatsApp',
@@ -447,7 +464,7 @@ server.registerTool(
   }
 )
 
-server.registerTool(
+registerMutating(
   'delete_chat',
   {
     title: 'Delete a chat from WhatsApp',
@@ -471,7 +488,7 @@ server.registerTool(
   }
 )
 
-server.registerTool(
+registerMutating(
   'delete_local_messages',
   {
     title: 'Delete messages from the local store only',
@@ -496,7 +513,7 @@ server.registerTool(
   }
 )
 
-server.registerTool(
+registerMutating(
   'delete_local_chat',
   {
     title: 'Delete a chat from the local store only',
@@ -513,7 +530,7 @@ server.registerTool(
   }
 )
 
-server.registerTool(
+registerMutating(
   'purge_local_database',
   {
     title: 'Empty the entire local store',

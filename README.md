@@ -118,6 +118,50 @@ Desktop config, `node src/setup.js` prints the path and the block to paste.
 
 Restart your client and the tools appear.
 
+### Using it from ChatGPT
+
+ChatGPT cannot run a local MCP server. It only talks to remote servers over
+HTTPS, so `node src/mcp-server.js` is invisible to it — there is no stdio option.
+
+OpenAI's [Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
+closes that gap without putting anything on the public internet: you run a client
+on your own machine that makes an **outbound** connection to OpenAI, and it
+forwards requests to the local server. No ports opened, no inbound access.
+
+Get `tunnel-client` and a `tunnel_id` from Platform → Tunnels, then:
+
+```bash
+export CONTROL_PLANE_API_KEY="sk-..."
+
+tunnel-client init \
+  --sample sample_mcp_stdio_local \
+  --profile whatsapp \
+  --tunnel-id tunnel_xxxxxxxx \
+  --mcp-command "node /absolute/path/to/whatsapp-mcp/src/mcp-server.js"
+
+tunnel-client doctor --profile whatsapp --explain
+tunnel-client run --profile whatsapp
+```
+
+In ChatGPT: new connector → **Tunnel** under Connection → pick the tunnel.
+
+Two things to know. The bridge still runs separately — the tunnel only fronts the
+MCP server, so `src/bridge.js` must be running for anything to sync or send. And
+`tunnel-client run` has to stay up; tool calls fail when it stops.
+
+### Read-only mode
+
+```bash
+WHATSAPP_MCP_READONLY=1 node src/mcp-server.js
+```
+
+Registers the six read tools and nothing else — `send_message` and all seven
+delete tools are never registered, so they cannot be called at all.
+
+Worth considering when a second client or a second model is driving the tools.
+The guardrails on the mutating tools are instructions to a model; withholding the
+tools is the part the code actually enforces. Off by default.
+
 ## Usage
 
 Ask naturally — the tools are used automatically:

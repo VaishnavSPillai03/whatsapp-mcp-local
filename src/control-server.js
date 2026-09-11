@@ -175,11 +175,25 @@ export function startControlServer (getSocket, {
    * is the only way to answer "which groups am I actually in, and how big".
    * Read-only: nothing is sent and nothing is written.
    */
-  async function handleGroups (reply) {
+  async function handleGroups (reply, body) {
     const sock = getSocket()
     if (!sock) return reply(503, { error: 'bridge is not connected to WhatsApp right now - retry shortly' })
     try {
       const all = await sock.groupFetchAllParticipating()
+
+      // Asked about one group: return its member list. Kept opt-in, because a
+      // roster is personal data and most callers only want sizes.
+      if (body?.jid) {
+        const g = Object.values(all ?? {}).find(x => x.id === body.jid)
+        if (!g) return reply(404, { error: 'not a group this account belongs to' })
+        return reply(200, {
+          ok: true,
+          subject: g.subject ?? '',
+          size: g.participants?.length ?? 0,
+          participants: (g.participants ?? []).map(p => ({ id: p.id, admin: p.admin ?? null }))
+        })
+      }
+
       const groups = Object.values(all ?? {}).map(g => ({
         jid: g.id,
         subject: g.subject ?? '',
@@ -272,10 +286,10 @@ export function startControlServer (getSocket, {
     if (req.method !== 'POST') return reply(404, { error: 'not found' })
     if (!['/send', '/check', '/groups', '/delete'].includes(req.url)) return reply(404, { error: 'not found' })
 
-    if (req.url === '/groups') return handleGroups(reply)
-
     const body = await readBody(req, reply)
     if (body === null) return
+
+    if (req.url === '/groups') return handleGroups(reply, body)
 
     if (req.url === '/send') return handleSend(body, reply)
     if (req.url === '/check') return handleCheck(body, reply)

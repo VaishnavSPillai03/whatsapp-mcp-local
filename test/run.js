@@ -301,6 +301,68 @@ let threw = false
 try { await call('get_messages', { chat_jid: 'x@lid', before_time: 'not-a-date' }) } catch { threw = true }
 check('invalid date is reported as an error, not a crash', () => assert.equal(threw, true))
 
+// ------------------------------------------------------- read-only mode
+
+// The point of read-only mode is that a second client — ChatGPT over a tunnel,
+// say — cannot send or delete. That guarantee is worth a test of its own,
+// because it is enforced by code rather than by a tool description.
+console.log('\nread-only mode')
+{
+  const ro = spawn(process.execPath, [join(ROOT, 'src', 'mcp-server.js')], {
+    stdio: ['pipe', 'pipe', 'ignore'],
+    env: { ...process.env, WHATSAPP_MCP_READONLY: '1' }
+  })
+  let rbuf = ''
+  const rpend = new Map()
+  let rid = 1
+  ro.stdout.on('data', d => {
+    rbuf += d
+    let i
+    while ((i = rbuf.indexOf('\n')) >= 0) {
+      const line = rbuf.slice(0, i).trim(); rbuf = rbuf.slice(i + 1)
+      if (!line) continue
+      const m = JSON.parse(line)
+      const r = rpend.get(m.id)
+      if (r) { rpend.delete(m.id); r(m) }
+    }
+  })
+  const rsend = (method, params) => {
+    const id = rid++
+    const p = new Promise(res => rpend.set(id, res))
+    ro.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n')
+    return p
+  }
+  await rsend('initialize', {
+    protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1' }
+  })
+  ro.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n')
+  const roTools = (await rsend('tools/list', {})).result.tools.map(t => t.name).sort()
+
+  check('read-only mode exposes only the read tools', () => {
+    assert.deepEqual(roTools, [
+      'get_message_context', 'get_messages', 'get_stats',
+      'list_chats', 'list_contacts', 'search_messages'
+    ])
+  })
+  check('read-only mode registers no send or delete tool at all', () => {
+    const bad = roTools.filter(n => /send|delete|clear|purge/i.test(n))
+    assert.deepEqual(bad, [], `these should not exist in read-only mode: ${bad}`)
+  })
+  {
+    const r = await rsend('tools/call', { name: 'send_message', arguments: { chat_jid: 'x@lid', text: 'nope' } })
+    check('calling send_message in read-only mode fails rather than sending', () => {
+      assert.ok(r.error || r.result?.isError, 'send_message was callable in read-only mode')
+    })
+  }
+  {
+    const r = await rsend('tools/call', { name: 'purge_local_database', arguments: { confirm: true } })
+    check('calling purge_local_database in read-only mode fails rather than wiping', () => {
+      assert.ok(r.error || r.result?.isError, 'purge was callable in read-only mode')
+    })
+  }
+  await new Promise(res => { ro.once('exit', res); ro.kill() })
+}
+
 // ------------------------------------------------------- local deletion
 
 // These run against a throwaway copy of the fixture store, so a bug here can
