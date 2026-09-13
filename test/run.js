@@ -559,6 +559,88 @@ console.log('\ncontrol server')
   ctl.close()
 }
 {
+  // /check and /groups. Both only read — nothing is delivered and nothing is
+  // written — but both reach WhatsApp, so the request shapes are worth pinning.
+  const { startControlServer } = await import('../src/control-server.js')
+  const sock = {
+    // Baileys returns only the numbers it resolved; absence is the answer for the rest
+    onWhatsApp: async (...jids) => jids
+      .filter(j => !j.startsWith('999'))
+      .map(j => ({ jid: j, exists: true })),
+    groupFetchAllParticipating: async () => ({
+      'a@g.us': { id: 'a@g.us', subject: 'Open Group', announce: false, participants: [{ id: '1@s.whatsapp.net' }, { id: '2@s.whatsapp.net', admin: 'admin' }] },
+      'b@g.us': { id: 'b@g.us', subject: 'Announce Only', announce: true, participants: [{ id: '3@s.whatsapp.net' }] }
+    })
+  }
+  const dir = join(TMP, 'ctl-read')
+  mkdirSync(dir, { recursive: true })
+  const ctl = startControlServer(() => sock, { dataDir: dir, logger: { error () {} } })
+  await new Promise(r => setTimeout(r, 50))
+  const cfg = JSON.parse(readFileSync(join(dir, 'control.json'), 'utf8'))
+  const post = async (path, body) => {
+    const res = await fetch(`http://127.0.0.1:${cfg.port}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${cfg.token}` },
+      body: JSON.stringify(body)
+    })
+    return { status: res.status, body: await res.json().catch(() => ({})) }
+  }
+
+  const chk = await post('/check', { numbers: ['919810007690', '9998887776655'] })
+  check('/check reports which numbers have WhatsApp accounts', () => {
+    assert.equal(chk.status, 200)
+    const live = chk.body.results.find(r => r.number === '919810007690')
+    const dead = chk.body.results.find(r => r.number === '9998887776655')
+    assert.equal(live.exists, true)
+    assert.equal(dead.exists, false, 'a number WhatsApp did not resolve should come back false')
+  })
+
+  const dirty = await post('/check', { numbers: ['+91 98100 07690', 'abc', '12'] })
+  check('/check strips formatting and drops unusable entries', () => {
+    assert.equal(dirty.status, 200)
+    assert.equal(dirty.body.results.length, 1, 'only the real number should survive cleaning')
+    assert.equal(dirty.body.results[0].number, '919810007690')
+  })
+
+  const tooMany = await post('/check', { numbers: Array.from({ length: 51 }, (_, i) => `9198100076${String(i).padStart(2, '0')}`) })
+  check('/check refuses more than 50 numbers in one call', () => {
+    assert.equal(tooMany.status, 400)
+    assert.match(tooMany.body.error, /too many/i)
+  })
+
+  const noNums = await post('/check', {})
+  check('/check rejects a request with no numbers', () => assert.equal(noNums.status, 400))
+
+  const groups = await post('/groups', {})
+  check('/groups lists groups with size and whether posting is restricted', () => {
+    assert.equal(groups.status, 200)
+    assert.equal(groups.body.count, 2)
+    const open = groups.body.groups.find(g => g.subject === 'Open Group')
+    const announce = groups.body.groups.find(g => g.subject === 'Announce Only')
+    assert.equal(open.size, 2)
+    assert.equal(open.announce, false)
+    assert.equal(announce.announce, true, 'admin-only groups must be flagged, or you plan a post you cannot make')
+  })
+
+  const one = await post('/groups', { jid: 'a@g.us' })
+  check('/groups returns the member list only when a jid is asked for', () => {
+    assert.equal(one.status, 200)
+    assert.equal(one.body.participants.length, 2)
+    assert.equal(one.body.participants[1].admin, 'admin')
+    assert.ok(!groups.body.groups[0].participants, 'the bulk listing must not leak rosters')
+  })
+
+  const missing = await post('/groups', { jid: 'nope@g.us' })
+  check('/groups 404s on a group this account is not in', () => assert.equal(missing.status, 404))
+
+  const unauthed = await fetch(`http://127.0.0.1:${cfg.port}/groups`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}'
+  })
+  check('/groups rejects a missing token', () => assert.equal(unauthed.status, 401))
+
+  ctl.close()
+}
+{
   const { startControlServer } = await import('../src/control-server.js')
 
   // Stands in for Baileys: the socket object is REPLACED on every reconnect, which
