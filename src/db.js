@@ -1,12 +1,13 @@
 import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { dataDir } from './paths.js'
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
-
-export const DB_PATH = process.env.WHATSAPP_MCP_DB || join(ROOT, 'data', 'store.db')
-export const AUTH_DIR = process.env.WHATSAPP_MCP_AUTH || join(ROOT, 'data', 'auth')
+// paths.js decides this: the repo's data/ when running from source, and a
+// per-user application directory when packaged, since an installed executable
+// may sit somewhere it is not allowed to write.
+export const DB_PATH = process.env.WHATSAPP_MCP_DB || join(dataDir(), 'store.db')
+export const AUTH_DIR = process.env.WHATSAPP_MCP_AUTH || join(dataDir(), 'auth')
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS chats (

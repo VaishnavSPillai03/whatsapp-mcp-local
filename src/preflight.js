@@ -34,10 +34,12 @@ free of native build steps. Upgrading Node is the only requirement.
 checkNodeVersion()
 
 // Some distribution builds of Node omit node:sqlite even at a new enough version.
-// Top-level await here means importers block until this resolves, so db.js is
-// never reached on a build that can't support it.
+// Checked synchronously via getBuiltinModule rather than with a top-level await:
+// the packaged build is CommonJS, which has no top-level await, and this file
+// must behave identically either way. Being synchronous also means importers
+// cannot reach db.js before the check has run.
 try {
-  await import('node:sqlite')
+  if (!process.getBuiltinModule?.('node:sqlite')) throw new Error('node:sqlite unavailable')
 } catch {
   console.error(`
 Node ${process.versions.node} does not expose node:sqlite.

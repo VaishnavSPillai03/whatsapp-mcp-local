@@ -13,7 +13,7 @@
  * Standalone:  node src/lid-import.js
  */
 import { readdirSync, readFileSync } from 'node:fs'
-import { pathToFileURL } from 'node:url'
+import { basename } from 'node:path'
 import { openDb, AUTH_DIR } from './db.js'
 
 const FILE_RE = /^lid-mapping-(.+?)(_reverse)?\.json$/
@@ -69,9 +69,10 @@ export function importLidMappings (db) {
   return { scanned, imported: pairs.size }
 }
 
-// Run directly rather than imported by the bridge. pathToFileURL matters on
-// Windows: a raw `file://` + `C:\...` never matches Node's `file:///C:/...`.
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Run directly rather than imported by the bridge. Compared by filename rather
+// than import.meta.url, which is empty in the packaged CommonJS build - there
+// this file is never the entry point, so not running is the right answer.
+if (basename(process.argv[1] || '') === 'lid-import.js') {
   const db = openDb()
   const { scanned, imported } = importLidMappings(db)
   console.log(`scanned ${scanned} mapping files, stored ${imported} LID<->phone pairs`)

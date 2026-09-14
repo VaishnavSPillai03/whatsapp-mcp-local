@@ -548,4 +548,10 @@ registerMutating(
   }
 )
 
-await server.connect(new StdioServerTransport())
+// Not awaited at the top level: the packaged build is CommonJS, which has no
+// top-level await. A failure here means Claude will never reach the tools, so
+// it is reported and the process ends rather than idling silently.
+server.connect(new StdioServerTransport()).catch(err => {
+  console.error('[mcp] failed to start:', err?.message || err)
+  process.exit(1)
+})
