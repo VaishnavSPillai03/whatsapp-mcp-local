@@ -30,7 +30,14 @@ const GRACE_DAYS = 7
 /** How often to re-check while online. */
 const RECHECK_HOURS = 24
 
-const API = process.env.LICENCE_API || 'https://api.example.invalid/v1'
+/**
+ * Where the app checks licence keys.
+ *
+ * This has to be a real, reachable address in the shipped build: the customer
+ * machine has no LICENCE_API set, so whatever is baked in here is what every
+ * activation talks to. A placeholder means every key fails.
+ */
+const API = process.env.LICENCE_API || 'https://whatsapp-mcp-local-production.up.railway.app/v1'
 
 const statePath = () => join(ensureDataDir(), 'licence.json')
 
