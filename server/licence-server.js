@@ -21,7 +21,7 @@ import { createServer } from 'node:http'
 import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { randomBytes } from 'node:crypto'
-import { verifySignature, interpret, deliverKey } from './razorpay-webhook.js'
+import { verifySignature, interpret, deliverKey, verifyReturn } from './razorpay-webhook.js'
 
 const DB = process.env.LICENCE_DB || join(process.cwd(), 'server', 'licences.json')
 const PORT = Number(process.env.PORT || 8787)
@@ -199,6 +199,92 @@ async function handleWebhook (req, res) {
   json(res, 200, { ok: true })
 }
 
+/**
+ * The page the customer lands on straight after paying.
+ *
+ * Email is not a dependable delivery channel for a licence key - a cheap TLD,
+ * a strict spam filter or a typo in the address and someone who has just paid
+ * ₹1,999 gets nothing and asks for a refund. So the key is shown on screen
+ * here, and the email becomes a backup rather than the only route.
+ *
+ * The signature in the URL is what makes this safe to serve. Without it the
+ * URL would be a guessable way to read other people's keys.
+ */
+function successPage (req, res) {
+  const url = new URL(req.url, 'http://localhost')
+  const params = Object.fromEntries(url.searchParams)
+
+  const page = (title, bodyHtml, status = 200, refresh = 0) => {
+    res.writeHead(status, {
+      'content-type': 'text/html; charset=utf-8',
+      'x-robots-tag': 'noindex, nofollow',
+      'cache-control': 'no-store'
+    })
+    res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+${refresh ? `<meta http-equiv="refresh" content="${refresh}">` : ''}
+<title>${title}</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap" rel="stylesheet">
+<style>
+ html,body{height:100%}
+ body{margin:0;background:#0a0a0a;color:#fff;display:grid;place-items:center;padding:1.5rem;
+   font-family:"Inter",system-ui,-apple-system,"Segoe UI",sans-serif;line-height:1.6}
+ .box{max-width:34rem;text-align:center}
+ h1{font-size:clamp(1.8rem,5vw,2.8rem);font-weight:900;letter-spacing:-.035em;margin:0 0 1rem;line-height:1.1}
+ p{color:#9a9a9a;margin:0 0 1.4rem}
+ .key{font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;font-size:clamp(1.1rem,3.6vw,1.7rem);
+   font-weight:700;letter-spacing:.06em;background:#151515;border:1px solid #2a2a2a;
+   padding:1.1rem 1.2rem;border-radius:10px;word-break:break-all;margin:0 0 1rem;color:#fff}
+ button,a.btn{display:inline-block;background:#fff;color:#0a0a0a;border:0;font-weight:700;font-size:1rem;
+   padding:.85rem 1.9rem;border-radius:999px;cursor:pointer;text-decoration:none;font-family:inherit}
+ ol{text-align:left;color:#9a9a9a;margin:2rem 0 0;padding-left:1.2rem}
+ ol li{margin:.5rem 0}
+ .small{font-size:.85rem;color:#6e6e6e;margin-top:2rem}
+</style></head><body><div class="box">${bodyHtml}</div></body></html>`)
+  }
+
+  if (!verifyReturn(params)) {
+    // Either someone is poking at the URL, or RAZORPAY_KEY_SECRET is not set
+    // on this server. Both look the same from out here on purpose.
+    console.warn('[success] rejected a return with a bad or unverifiable signature')
+    return page('Could not verify payment', `
+      <h1>We could not verify that payment</h1>
+      <p>If you have just paid, your key is on its way by email. Nothing has gone
+         wrong with your payment - this page just could not confirm it.</p>
+      <p class="small">Still stuck? Reply to your payment receipt and a human will sort it out.</p>`, 403)
+  }
+
+  const subId = params.razorpay_subscription_id || null
+  const key = subId ? keyForSubscription(load(), subId) : null
+
+  if (!key) {
+    // The webhook and the browser redirect race each other. The customer
+    // usually wins by a second or two, so wait rather than claim failure.
+    return page('Preparing your key', `
+      <h1>One moment</h1>
+      <p>Your payment went through. We are generating your licence key now -
+         this page will refresh by itself.</p>
+      <p class="small">If this is still here after a minute, check your email;
+         the key is sent there too.</p>`, 200, 4)
+  }
+
+  const dl = process.env.DOWNLOAD_URL || ''
+  page('Your licence key', `
+    <h1>You're in.</h1>
+    <p>This is your licence key. Copy it now - it is also in your email.</p>
+    <div class="key" id="k">${String(key).replace(/[<>&"]/g, '')}</div>
+    <button onclick="navigator.clipboard.writeText(document.getElementById('k').textContent.trim());this.textContent='Copied'">Copy key</button>
+    ${dl ? `<p style="margin-top:1.6rem"><a class="btn" href="${dl}">Download Verge</a></p>` : ''}
+    <ol>
+      <li>${dl ? 'Download and run Verge' : 'Download Verge from the link in your email and run it'}</li>
+      <li>Paste the key above</li>
+      <li>Scan the QR code with WhatsApp on your phone</li>
+      <li>Restart Claude, then ask it something about your messages</li>
+    </ol>
+    <p class="small">One key, one computer. Reply to your receipt if anything goes wrong.</p>`)
+}
+
 const server = createServer(async (req, res) => {
   if (req.url === '/health') return json(res, 200, { ok: true })
 
@@ -220,6 +306,10 @@ const server = createServer(async (req, res) => {
 
   if (req.url === '/webhook/razorpay' && req.method === 'POST') {
     return handleWebhook(req, res)
+  }
+
+  if (req.url.startsWith('/success') && req.method === 'GET') {
+    return successPage(req, res)
   }
 
   if (req.url !== '/v1/activate' || req.method !== 'POST') {

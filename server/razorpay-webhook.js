@@ -141,3 +141,39 @@ export async function deliverKey ({ email, key, plan, brand = 'Verge', downloadU
     return { sent: false, reason: err.message }
   }
 }
+
+/**
+ * Verifies the signature Razorpay puts in the URL when it sends the customer
+ * back after paying.
+ *
+ * This is a DIFFERENT secret and a different payload from the webhook above.
+ * The webhook signs the whole raw body with the webhook secret; the browser
+ * return signs a short string with the API key secret. Mixing them up either
+ * locks every real customer out of their key or hands keys to anyone who
+ * guesses a URL, so they stay separate functions.
+ *
+ * Payload shapes are fixed by Razorpay's own SDKs:
+ *   subscription:  paymentId + '|' + subscriptionId
+ *   one-off order: orderId   + '|' + paymentId
+ */
+export function verifyReturn (params, secret = process.env.RAZORPAY_KEY_SECRET) {
+  // Fail closed. No secret configured means we cannot prove anything, and the
+  // safe answer is "no" rather than "sure, here is a licence key".
+  if (!secret) return false
+
+  const sig = params.razorpay_signature
+  const paymentId = params.razorpay_payment_id
+  const subscriptionId = params.razorpay_subscription_id
+  const orderId = params.razorpay_order_id
+  if (!sig || !paymentId) return false
+
+  const payload = subscriptionId
+    ? `${paymentId}|${subscriptionId}`
+    : orderId ? `${orderId}|${paymentId}` : null
+  if (!payload) return false
+
+  const expected = createHmac('sha256', secret).update(payload).digest('hex')
+  const a = Buffer.from(expected, 'utf8')
+  const b = Buffer.from(String(sig), 'utf8')
+  return a.length === b.length && timingSafeEqual(a, b)
+}
