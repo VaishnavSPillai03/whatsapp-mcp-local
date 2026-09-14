@@ -1,0 +1,25 @@
+# What gets uploaded when deploying from this machine.
+#
+# Deny everything, then allow back only the licence server. Written as an
+# allow-list on purpose: this directory also holds WhatsApp credentials, a
+# database of real messages, and outreach files full of real names and phone
+# numbers. A deny-list would need updating every time something new appears,
+# and the cost of forgetting once is uploading someone's private messages to a
+# build server.
+*
+
+!Dockerfile
+!railway.json
+!server/
+!server/package.json
+!server/licence-server.js
+!server/razorpay-webhook.js
+
+# Belt and braces: even if an allow rule above is ever loosened, these must
+# never leave this machine.
+data/
+outreach/
+dist/
+node_modules/
+*.db
+*.log
