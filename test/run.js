@@ -5,7 +5,7 @@
  *   node test/run.js
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -717,6 +717,181 @@ console.log('\ncontrol server')
 
   ctl.close()
   await new Promise(r => setTimeout(r, 50))
+}
+
+// ------------------------------------------------------- packaging pieces
+
+// The modules a paying customer's first five minutes depend on. Each failure
+// here is a refund, so they are tested rather than assumed.
+console.log('\npackaging')
+{
+  const { looksLikeKey, machineId } = await import('../src/licence.js')
+  const { mcpEntry, writeConfig, isRegistered, configBlock } = await import('../src/claude-config.js')
+
+  check('licence key format accepts a real key', () => {
+    assert.equal(looksLikeKey('Q9VB-ZMPT-H6UB-HUYS'), true)
+    assert.equal(looksLikeKey('q9vb-zmpt-h6ub-huys'), true, 'lowercase should be accepted; people paste what they are sent')
+  })
+  check('licence key format rejects junk before bothering the server', () => {
+    for (const bad of ['', 'hello', 'ABCD-EFGH', 'ABCD EFGH IJKL MNOP', null, undefined, 12345]) {
+      assert.equal(looksLikeKey(bad), false, `should have rejected: ${bad}`)
+    }
+  })
+
+  check('machine id is stable and carries nothing identifying', () => {
+    const a = machineId(); const b = machineId()
+    assert.equal(a, b, 'two calls must agree or seats leak on every restart')
+    assert.match(a, /^[0-9a-f]{32}$/, 'should be a hash, not a hostname')
+  })
+
+  check('config entry differs packaged vs from source', () => {
+    const packaged = mcpEntry({ packaged: true, execPath: 'C:/app.exe', scriptPath: 'ignored' })
+    assert.deepEqual(packaged, { command: 'C:/app.exe', args: ['--mcp'] })
+    const source = mcpEntry({ packaged: false, execPath: 'C:/node.exe', scriptPath: 'C:/src/mcp-server.js' })
+    assert.deepEqual(source, { command: 'C:/node.exe', args: ['C:/src/mcp-server.js'] })
+  })
+
+  const cfgDir = join(TMP, 'cfg')
+  mkdirSync(cfgDir, { recursive: true })
+  const entry = { command: 'C:/app.exe', args: ['--mcp'] }
+
+  {
+    const f = join(cfgDir, 'fresh.json')
+    const r = writeConfig(f, entry, 'testbrand')
+    check('writes a config that does not exist yet', () => {
+      assert.equal(r.ok, true)
+      assert.deepEqual(JSON.parse(readFileSync(f, 'utf8')).mcpServers.testbrand, entry)
+    })
+    check('recognises its own entry afterwards', () => {
+      assert.equal(isRegistered(f, entry, 'testbrand'), true)
+      assert.equal(isRegistered(f, { command: 'other' }, 'testbrand'), false)
+    })
+  }
+
+  {
+    // The important one: a user with other MCP servers must keep them.
+    const f = join(cfgDir, 'existing.json')
+    writeFileSync(f, JSON.stringify({
+      mcpServers: { github: { command: 'gh-mcp' } },
+      someOtherSetting: { keep: true }
+    }, null, 2))
+    writeConfig(f, entry, 'testbrand')
+    const after = JSON.parse(readFileSync(f, 'utf8'))
+    check('merges into an existing config without destroying anything', () => {
+      assert.deepEqual(after.mcpServers.github, { command: 'gh-mcp' }, 'another MCP server was lost')
+      assert.deepEqual(after.someOtherSetting, { keep: true }, 'an unrelated setting was lost')
+      assert.deepEqual(after.mcpServers.testbrand, entry)
+    })
+    check('backs the file up before touching it', () => {
+      assert.ok(existsSync(`${f}.backup`), 'no backup was written')
+      assert.ok(JSON.parse(readFileSync(`${f}.backup`, 'utf8')).mcpServers.github)
+    })
+  }
+
+  {
+    // A config we cannot parse is usually one the user hand-edited. Destroying
+    // it would be unforgivable, so we refuse rather than overwrite.
+    const f = join(cfgDir, 'broken.json')
+    const original = '{ this is not json at all'
+    writeFileSync(f, original)
+    const r = writeConfig(f, entry, 'testbrand')
+    check('refuses to overwrite a config it cannot parse', () => {
+      assert.equal(r.ok, false)
+      assert.match(r.reason, /not valid JSON/i)
+    })
+    check('and leaves the unparseable file exactly as it was', () => {
+      assert.equal(readFileSync(f, 'utf8'), original)
+    })
+  }
+
+  {
+    const f = join(cfgDir, 'same.json')
+    writeConfig(f, entry, 'testbrand')
+    const again = writeConfig(f, entry, 'testbrand')
+    check('re-running setup reports no change rather than rewriting', () => {
+      assert.equal(again.unchanged, true)
+    })
+  }
+
+  check('the paste-it-yourself block is valid JSON', () => {
+    const parsed = JSON.parse(configBlock(entry, 'testbrand'))
+    assert.deepEqual(parsed.mcpServers.testbrand, entry)
+  })
+}
+
+// ------------------------------------------------------- licence server
+console.log('\nlicence server')
+{
+  const licDb = join(TMP, 'lic.json')
+  const run = args => spawnSync(process.execPath, [join(ROOT, 'server', 'licence-server.js'), ...args],
+    { env: { ...process.env, LICENCE_DB: licDb }, encoding: 'utf8' })
+
+  const issued = run(['--issue', '2']).stdout.trim().split('\n')
+  check('issues keys in a format people can type', () => {
+    assert.equal(issued.length, 2)
+    for (const k of issued) {
+      assert.match(k, /^[A-Z0-9]{4}(-[A-Z0-9]{4}){3}$/)
+      assert.ok(!/[OI01]/.test(k), `${k} contains characters that look like each other`)
+    }
+  })
+
+  const port = 8799
+  const srv = spawn(process.execPath, [join(ROOT, 'server', 'licence-server.js')], {
+    env: { ...process.env, LICENCE_DB: licDb, PORT: String(port) },
+    stdio: 'ignore'
+  })
+  await new Promise(r => setTimeout(r, 700))
+
+  const activate = async (key, machine) => {
+    const res = await fetch(`http://127.0.0.1:${port}/v1/activate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key, machine })
+    })
+    return { status: res.status, body: await res.json().catch(() => ({})) }
+  }
+
+  const first = await activate(issued[0], 'machine-a')
+  check('a valid key activates', () => {
+    assert.equal(first.status, 200)
+    assert.equal(first.body.plan, 'solo')
+  })
+
+  const reactivate = await activate(issued[0], 'machine-a')
+  check('the same machine can reactivate, so reinstalling is free', () => {
+    assert.equal(reactivate.status, 200)
+    assert.equal(reactivate.body.used, 1, 'a reinstall must not consume a second seat')
+  })
+
+  const second = await activate(issued[0], 'machine-b')
+  check('a second machine is refused on a one-seat plan', () => {
+    assert.equal(second.status, 409)
+  })
+
+  const bogus = await activate('ZZZZ-ZZZZ-ZZZZ-ZZZZ', 'machine-a')
+  check('an unknown key is rejected as 404, not 500', () => {
+    // The client treats 5xx as "network trouble" and keeps working. A wrong
+    // key returning 500 would hand out a free grace period.
+    assert.equal(bogus.status, 404)
+  })
+
+  {
+    const data = JSON.parse(readFileSync(licDb, 'utf8'))
+    data.keys[issued[1]].revoked = true
+    writeFileSync(licDb, JSON.stringify(data, null, 2))
+    const revoked = await activate(issued[1], 'machine-c')
+    check('a revoked key stops working', () => assert.equal(revoked.status, 403))
+  }
+
+  {
+    const data = JSON.parse(readFileSync(licDb, 'utf8'))
+    data.keys[issued[0]].expires = new Date(Date.now() - 86400000).toISOString()
+    writeFileSync(licDb, JSON.stringify(data, null, 2))
+    const expired = await activate(issued[0], 'machine-a')
+    check('an expired subscription stops working', () => assert.equal(expired.status, 403))
+  }
+
+  await new Promise(resolve => { srv.once('exit', resolve); srv.kill() })
 }
 
 // ---------------------------------------------------------------- teardown

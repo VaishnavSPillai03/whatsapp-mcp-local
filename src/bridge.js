@@ -51,6 +51,17 @@ const logger = pino({ level: process.env.LOG_LEVEL || 'silent' })
 const db = openDb()
 const DATA_DIR = join(AUTH_DIR, '..')
 const QR_PNG = join(DATA_DIR, 'qr.png')
+
+/**
+ * Machine-readable state, for the setup window watching this process.
+ *
+ * A separate line from the human logging on purpose. The setup UI needs to know
+ * what is happening, and parsing prose written for people means every reworded
+ * log message silently breaks it.
+ */
+function emitStatus (state, detail = {}) {
+  console.error(`[status] ${JSON.stringify({ state, ...detail })}`)
+}
 const LOCK = join(DATA_DIR, 'bridge.lock')
 
 /*
@@ -257,6 +268,7 @@ async function connect () {
       console.error(`  QR #${qrCount} - SCAN THIS ONE. Any code above is already expired.`)
       console.error('='.repeat(60) + '\n')
       qrcode.generate(qr, { small: true })
+      emitStatus('qr', { attempt: qrCount })
 
       // The PNG is overwritten in place on every rotation, so an open image viewer
       // always shows the live code — no stale scrollback to scan by mistake.
@@ -272,6 +284,7 @@ async function connect () {
 
     if (connection === 'open') {
       console.error('[bridge] connected. syncing history (this can take a few minutes)...')
+      emitStatus('connected')
       // Baileys writes LID<->phone pairs to the auth folder as it learns them, so
       // re-scan periodically to keep chat names resolving as new ones appear.
       syncLidMappings()
@@ -288,9 +301,11 @@ async function connect () {
       const status = lastDisconnect?.error?.output?.statusCode
       if (status === DisconnectReason.loggedOut) {
         console.error('[bridge] logged out on the phone. Delete data/auth and re-link to continue.')
+        emitStatus('logged-out')
         process.exit(1)
       }
       console.error(`[bridge] connection closed (${status}), reconnecting in 3s...`)
+      emitStatus('reconnecting', { status: status ?? null })
       setTimeout(connect, 3000)
     }
   })
