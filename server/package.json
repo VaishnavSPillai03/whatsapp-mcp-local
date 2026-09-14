@@ -1,0 +1,15 @@
+{
+  "name": "licence-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Issues and validates licence keys, and turns Razorpay payments into them.",
+  "main": "licence-server.js",
+  "scripts": {
+    "start": "node licence-server.js",
+    "issue": "node licence-server.js --issue"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

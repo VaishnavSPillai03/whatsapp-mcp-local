@@ -10,7 +10,10 @@
 FROM node:22-alpine
 
 WORKDIR /app
-COPY licence-server.js razorpay-webhook.js ./
+# package.json carries "type": "module". Node can infer that from the syntax,
+# but relying on inference for something this load-bearing is asking for a
+# surprise on a future runtime.
+COPY package.json licence-server.js razorpay-webhook.js ./
 
 # Where the volume gets mounted. Override LICENCE_DB if your host differs.
 ENV LICENCE_DB=/data/licences.json
