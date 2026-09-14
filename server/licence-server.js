@@ -18,7 +18,7 @@
  *     errors as "network trouble" and keeps working during the grace window
  */
 import { createServer } from 'node:http'
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { verifySignature, interpret, deliverKey } from './razorpay-webhook.js'
@@ -248,7 +248,64 @@ const server = createServer(async (req, res) => {
   })
 })
 
+/**
+ * Refuse to run somewhere the key store would not survive a restart.
+ *
+ * Most hosts give containers an ephemeral filesystem. Losing licences.json
+ * locks out every paying customer at once, and because the file IS the record
+ * of who they are, there is no way to work out who to apologise to. Far better
+ * to fail at boot, loudly, than to run for three weeks and then lose everything.
+ *
+ * Set LICENCE_ALLOW_EPHEMERAL=1 only for local testing.
+ */
+function checkStorage () {
+  if (process.env.LICENCE_ALLOW_EPHEMERAL === '1') return
+
+  // Only meaningful in a container; a normal machine's disk persists.
+  const containerish = existsSync('/.dockerenv') || process.env.RAILWAY_ENVIRONMENT || process.env.RENDER
+
+  if (containerish && !/^\/(data|mnt|var\/data|persist)/.test(DB)) {
+    console.error(`
+REFUSING TO START
+
+  LICENCE_DB is ${DB}
+
+  That looks like a container filesystem, which is wiped on every restart and
+  every deploy. Losing this file locks out every paying customer at once, and
+  the file is the only record of who they are.
+
+  Mount a persistent volume and point LICENCE_DB at it, for example:
+
+    LICENCE_DB=/data/licences.json
+
+  If you are certain this is fine, set LICENCE_ALLOW_EPHEMERAL=1
+`)
+    process.exit(1)
+  }
+
+  // Prove we can actually write before accepting money.
+  try {
+    mkdirSync(dirname(DB), { recursive: true })
+    const probe = join(dirname(DB), '.write-probe')
+    writeFileSync(probe, 'ok')
+    rmSync(probe, { force: true })
+  } catch (err) {
+    console.error(`REFUSING TO START: cannot write to ${dirname(DB)} (${err.message})`)
+    process.exit(1)
+  }
+}
+
+checkStorage()
+
 server.listen(PORT, () => {
-  console.log(`licence server on http://127.0.0.1:${PORT}`)
+  console.log(`licence server on port ${PORT}`)
   console.log(`store: ${DB}`)
+  const count = Object.keys(load().keys).length
+  console.log(`${count} key${count === 1 ? '' : 's'} on file`)
+  if (!process.env.RAZORPAY_WEBHOOK_SECRET) {
+    console.warn('warning: RAZORPAY_WEBHOOK_SECRET is not set - webhooks will be refused')
+  }
+  if (!process.env.RESEND_API_KEY) {
+    console.warn('warning: no email provider configured - keys will be logged, not sent')
+  }
 })
