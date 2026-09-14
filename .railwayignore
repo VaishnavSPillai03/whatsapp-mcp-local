@@ -9,7 +9,7 @@
 *
 
 !Dockerfile
-!railway.json
+!railway.json.bak
 !server/
 !server/package.json
 !server/licence-server.js

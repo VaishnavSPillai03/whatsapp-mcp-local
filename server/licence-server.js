@@ -18,7 +18,7 @@
  *     errors as "network trouble" and keeps working during the grace window
  */
 import { createServer } from 'node:http'
-import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { verifySignature, interpret, deliverKey } from './razorpay-webhook.js'
@@ -202,6 +202,22 @@ async function handleWebhook (req, res) {
 const server = createServer(async (req, res) => {
   if (req.url === '/health') return json(res, 200, { ok: true })
 
+  // Something human at the root. People will open this in a browser - the
+  // operator checking it is alive, and anyone who notices the domain - and a
+  // bare "not found" reads as broken rather than as "nothing lives here".
+  if (req.url === '/' || req.url === '') {
+    return json(res, 200, {
+      service: 'licence server',
+      status: 'running',
+      keys: Object.keys(load().keys).length,
+      endpoints: {
+        'GET /health': 'liveness check',
+        'POST /v1/activate': 'the app checks a key here',
+        'POST /webhook/razorpay': 'payments arrive here'
+      }
+    })
+  }
+
   if (req.url === '/webhook/razorpay' && req.method === 'POST') {
     return handleWebhook(req, res)
   }
@@ -264,7 +280,50 @@ function checkStorage () {
   // Only meaningful in a container; a normal machine's disk persists.
   const containerish = existsSync('/.dockerenv') || process.env.RAILWAY_ENVIRONMENT || process.env.RENDER
 
-  if (containerish && !/^\/(data|mnt|var\/data|persist)/.test(DB)) {
+  /**
+   * Is the directory an actual mount point, or just a folder with a
+   * persistent-looking name?
+   *
+   * Checking the path alone was not enough, and the first deploy proved it:
+   * LICENCE_DB was /data/licences.json with no volume attached, the path
+   * matched, and the server started happily on to a disk that would be wiped.
+   * That is worse than no check at all - it gives confidence where there is
+   * none.
+   *
+   * A mount point has a different device id from its parent, which is what
+   * actually distinguishes "volume mounted here" from "empty folder".
+   */
+  const isMountPoint = dir => {
+    try {
+      return statSync(dir).dev !== statSync(join(dir, '..')).dev
+    } catch {
+      return false
+    }
+  }
+
+  const looksPersistent = /^\/(data|mnt|var\/data|persist)/.test(DB)
+
+  if (containerish && looksPersistent && !isMountPoint(dirname(DB))) {
+    console.error(`
+REFUSING TO START
+
+  LICENCE_DB is ${DB}
+
+  The path looks right, but nothing is actually mounted at ${dirname(DB)} -
+  it is an ordinary folder inside the container, which is wiped on every
+  restart and every deploy.
+
+  Attach a persistent volume mounted at ${dirname(DB)}.
+
+    Railway:  railway volume add --mount-path ${dirname(DB)}
+    Render:   add a Disk with that mount path
+
+  If you are certain this is fine, set LICENCE_ALLOW_EPHEMERAL=1
+`)
+    process.exit(1)
+  }
+
+  if (containerish && !looksPersistent) {
     console.error(`
 REFUSING TO START
 

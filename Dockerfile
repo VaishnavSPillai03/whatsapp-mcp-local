@@ -20,11 +20,12 @@ COPY server/package.json server/licence-server.js server/razorpay-webhook.js ./
 
 ENV LICENCE_DB=/data/licences.json
 ENV PORT=8787
-VOLUME ["/data"]
+
+# No VOLUME instruction on purpose. Railway, Render and similar hosts attach
+# their own persistent volumes, and an image declaring one they did not create
+# conflicts with that. The path still has to be a mounted volume - the server
+# refuses to start otherwise - it just is not declared here.
 
 EXPOSE 8787
-
-HEALTHCHECK --interval=30s --timeout=5s --start-period=5s \
-  CMD wget -qO- http://127.0.0.1:8787/health || exit 1
 
 CMD ["node", "licence-server.js"]
