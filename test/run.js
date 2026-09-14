@@ -899,6 +899,132 @@ console.log('\nlicence server')
   await new Promise(resolve => { srv.once('exit', resolve); srv.kill() })
 }
 
+// ------------------------------------------------------- razorpay webhook
+console.log('\nrazorpay webhook')
+{
+  const { verifySignature, interpret } = await import('../server/razorpay-webhook.js')
+  const { createHmac } = await import('node:crypto')
+
+  const secret = 'whsec_test'
+  const sign = body => createHmac('sha256', secret).update(body).digest('hex')
+
+  check('a valid signature is accepted', () => {
+    const body = JSON.stringify({ event: 'subscription.charged' })
+    assert.equal(verifySignature(body, sign(body), secret), true)
+  })
+  check('a forged or missing signature is rejected', () => {
+    const body = JSON.stringify({ event: 'subscription.charged' })
+    assert.equal(verifySignature(body, 'deadbeef', secret), false)
+    assert.equal(verifySignature(body, null, secret), false)
+    assert.equal(verifySignature(body, sign(body), 'wrong-secret'), false)
+  })
+  check('a tampered body invalidates the signature', () => {
+    // Razorpay signs the exact bytes, so re-serialising would break this too.
+    const body = JSON.stringify({ event: 'subscription.charged', amount: 1999 })
+    const sig = sign(body)
+    const altered = JSON.stringify({ event: 'subscription.charged', amount: 1 })
+    assert.equal(verifySignature(altered, sig, secret), false)
+  })
+
+  const charged = paidCount => ({
+    event: 'subscription.charged',
+    payload: {
+      subscription: { entity: { id: 'sub_1', plan_id: 'plan_x', paid_count: paidCount } },
+      payment: { entity: { email: 'buyer@example.com' } }
+    }
+  })
+
+  check('the first charge issues a key and captures the email', () => {
+    const d = interpret(charged(1))
+    assert.equal(d.action, 'issue')
+    assert.equal(d.email, 'buyer@example.com')
+    assert.equal(d.subscriptionId, 'sub_1')
+  })
+  check('a later charge extends rather than issuing again', () => {
+    assert.equal(interpret(charged(4)).action, 'extend')
+  })
+  check('a failed payment revokes', () => {
+    const d = interpret({ event: 'subscription.halted', payload: { subscription: { entity: { id: 'sub_1' } } } })
+    assert.equal(d.action, 'revoke')
+    assert.match(d.reason, /payment failed/)
+  })
+  check('a cancellation revokes', () => {
+    assert.equal(interpret({ event: 'subscription.cancelled', payload: { subscription: { entity: { id: 'sub_1' } } } }).action, 'revoke')
+  })
+  check('mandate-authorised is noted but acted on only when money arrives', () => {
+    // Authorising the mandate is not payment. Issuing here would give away a
+    // licence to anyone who starts checkout and abandons it.
+    assert.equal(interpret({ event: 'subscription.authenticated', payload: { subscription: { entity: { id: 'sub_1' } } } }).action, 'ignore')
+  })
+  check('an unknown event is ignored rather than guessed at', () => {
+    assert.equal(interpret({ event: 'payment.captured' }).action, 'ignore')
+    assert.equal(interpret({}).action, 'ignore')
+  })
+
+  // End to end against a live server, which is where idempotency actually lives.
+  const whDb = join(TMP, 'wh.json')
+  const port = 8798
+  const srv2 = spawn(process.execPath, [join(ROOT, 'server', 'licence-server.js')], {
+    env: { ...process.env, LICENCE_DB: whDb, PORT: String(port), RAZORPAY_WEBHOOK_SECRET: secret },
+    stdio: 'ignore'
+  })
+  await new Promise(r => setTimeout(r, 700))
+
+  const hook = async obj => {
+    const body = JSON.stringify(obj)
+    const res = await fetch(`http://127.0.0.1:${port}/webhook/razorpay`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-razorpay-signature': sign(body) },
+      body
+    })
+    return { status: res.status, body: await res.json().catch(() => ({})) }
+  }
+
+  const paid = await hook(charged(1))
+  check('paying issues a key', () => {
+    assert.equal(paid.status, 200)
+    assert.match(paid.body.key, /^[A-Z0-9]{4}(-[A-Z0-9]{4}){3}$/)
+  })
+
+  const retried = await hook(charged(1))
+  check('a retried delivery returns the same key, not a second one', () => {
+    // Razorpay retries anything it thinks failed. Without this a customer with
+    // one flaky delivery ends up with three keys and three seats.
+    assert.equal(retried.body.key, paid.body.key)
+    assert.equal(retried.body.duplicate, true)
+  })
+
+  const renewed = await hook(charged(2))
+  check('a renewal extends the same key', () => {
+    assert.equal(renewed.body.key, paid.body.key)
+    assert.ok(new Date(renewed.body.expires) > new Date(), 'expiry should be in the future')
+  })
+
+  const halted = await hook({ event: 'subscription.halted', payload: { subscription: { entity: { id: 'sub_1' } } } })
+  check('a failed payment revokes the key', () => {
+    assert.equal(halted.body.revoked, paid.body.key)
+  })
+
+  {
+    const res = await fetch(`http://127.0.0.1:${port}/v1/activate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key: paid.body.key, machine: 'm1' })
+    })
+    check('and the revoked key then stops activating', () => assert.equal(res.status, 403))
+  }
+
+  {
+    const body = JSON.stringify(charged(1))
+    const res = await fetch(`http://127.0.0.1:${port}/webhook/razorpay`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body
+    })
+    check('an unsigned webhook cannot mint a licence', () => assert.equal(res.status, 401))
+  }
+
+  await new Promise(resolve => { srv2.once('exit', resolve); srv2.kill() })
+}
+
 // ---------------------------------------------------------------- teardown
 
 // Wait for the child to actually exit. On Windows it keeps a handle on the

@@ -21,6 +21,7 @@ import { createServer } from 'node:http'
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { randomBytes } from 'node:crypto'
+import { verifySignature, interpret, deliverKey } from './razorpay-webhook.js'
 
 const DB = process.env.LICENCE_DB || join(process.cwd(), 'server', 'licences.json')
 const PORT = Number(process.env.PORT || 8787)
@@ -92,8 +93,118 @@ const readBody = req => new Promise(resolve => {
   req.on('end', () => { try { resolve(JSON.parse(raw)) } catch { resolve({}) } })
 })
 
+/** Raw body, needed as-is: Razorpay signs the exact bytes it sent. */
+const readRaw = req => new Promise(resolve => {
+  let raw = ''
+  req.on('data', c => { raw += c; if (raw.length > 200_000) req.destroy() })
+  req.on('end', () => resolve(raw))
+})
+
+/**
+ * Find the key already issued for a subscription.
+ *
+ * Razorpay retries deliveries it thinks failed, so without this a customer with
+ * a flaky first delivery ends up with three keys and three seats.
+ */
+function keyForSubscription (data, subscriptionId) {
+  return Object.entries(data.keys).find(([, r]) => r.subscriptionId === subscriptionId)?.[0] || null
+}
+
+async function handleWebhook (req, res) {
+  const raw = await readRaw(req)
+  const secret = process.env.RAZORPAY_WEBHOOK_SECRET
+
+  if (!secret) {
+    console.error('[webhook] RAZORPAY_WEBHOOK_SECRET is not set - refusing to process')
+    return json(res, 500, { error: 'not configured' })
+  }
+  if (!verifySignature(raw, req.headers['x-razorpay-signature'], secret)) {
+    console.error('[webhook] rejected: bad signature')
+    return json(res, 401, { error: 'bad signature' })
+  }
+
+  let event
+  try {
+    event = JSON.parse(raw)
+  } catch {
+    return json(res, 400, { error: 'invalid JSON' })
+  }
+
+  const planMapping = {}
+  for (const [rzpPlan, ours] of Object.entries(process.env.RAZORPAY_PLAN_MAP
+    ? JSON.parse(process.env.RAZORPAY_PLAN_MAP) : {})) planMapping[rzpPlan] = ours
+
+  const decision = interpret(event, { planMapping })
+  console.log(`[webhook] ${event.event} -> ${decision.action}${decision.reason ? ` (${decision.reason})` : ''}`)
+
+  if (decision.action === 'ignore') return json(res, 200, { ok: true, ignored: decision.reason })
+
+  const data = load()
+  const existing = decision.subscriptionId ? keyForSubscription(data, decision.subscriptionId) : null
+
+  if (decision.action === 'issue') {
+    // Already issued: a retry, or a renewal arriving as a first charge. Either
+    // way the customer has their key and must not get another.
+    if (existing) {
+      console.log(`[webhook] already issued ${existing} for ${decision.subscriptionId}`)
+      return json(res, 200, { ok: true, key: existing, duplicate: true })
+    }
+
+    const key = issue({ plan: decision.plan, months: decision.months, email: decision.email })
+    const fresh = load()
+    fresh.keys[key].subscriptionId = decision.subscriptionId
+    save(fresh)
+
+    const delivery = await deliverKey({
+      email: decision.email,
+      key,
+      plan: decision.plan,
+      downloadUrl: process.env.DOWNLOAD_URL || ''
+    })
+    console.log(`[webhook] issued ${key} for ${decision.email || 'unknown'} (emailed: ${delivery.sent})`)
+    return json(res, 200, { ok: true, key, emailed: delivery.sent })
+  }
+
+  if (decision.action === 'extend') {
+    if (!existing) {
+      // A renewal for a subscription we have no key for. Issue one rather than
+      // leaving a paying customer with nothing.
+      console.warn(`[webhook] renewal for unknown subscription ${decision.subscriptionId} - issuing`)
+      const key = issue({ plan: decision.plan, months: decision.months, email: decision.email })
+      const fresh = load()
+      fresh.keys[key].subscriptionId = decision.subscriptionId
+      save(fresh)
+      await deliverKey({ email: decision.email, key, plan: decision.plan, downloadUrl: process.env.DOWNLOAD_URL || '' })
+      return json(res, 200, { ok: true, key, recovered: true })
+    }
+    const record = data.keys[existing]
+    // Extend from whichever is later, so an early renewal does not shorten it.
+    const from = new Date(Math.max(Date.now(), new Date(record.expires).getTime()))
+    record.expires = new Date(from.getTime() + decision.months * 30 * 86400000).toISOString()
+    record.revoked = false
+    save(data)
+    console.log(`[webhook] extended ${existing} to ${record.expires}`)
+    return json(res, 200, { ok: true, key: existing, expires: record.expires })
+  }
+
+  if (decision.action === 'revoke') {
+    if (!existing) return json(res, 200, { ok: true, note: 'no key for that subscription' })
+    data.keys[existing].revoked = true
+    data.keys[existing].revokedReason = decision.reason
+    save(data)
+    console.log(`[webhook] revoked ${existing} (${decision.reason})`)
+    return json(res, 200, { ok: true, revoked: existing })
+  }
+
+  json(res, 200, { ok: true })
+}
+
 const server = createServer(async (req, res) => {
   if (req.url === '/health') return json(res, 200, { ok: true })
+
+  if (req.url === '/webhook/razorpay' && req.method === 'POST') {
+    return handleWebhook(req, res)
+  }
 
   if (req.url !== '/v1/activate' || req.method !== 'POST') {
     return json(res, 404, { error: 'not found' })
