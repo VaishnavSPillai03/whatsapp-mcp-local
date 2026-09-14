@@ -19,8 +19,9 @@ export const BRAND = {
   /** One line, used in the installer and the Claude connector description. */
   tagline: 'Ask your WhatsApp anything',
 
-  /** Company shown in the executable's file properties and the certificate. */
-  publisher: 'Cognitive Prime',
+  /** Shown in the executable's file properties. Same as the product name -
+   *  there is no separate company behind it. */
+  publisher: 'Verge',
 
   /** Bumped on release; the updater compares against what the server reports. */
   version: '1.0.0'
