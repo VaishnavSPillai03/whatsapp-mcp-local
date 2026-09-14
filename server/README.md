@@ -27,9 +27,8 @@ works fine for three weeks, then a routine deploy destroys the business.
 ### Railway
 
 1. New project → Deploy from GitHub → this repo
-2. Settings → root directory: `server`
-3. **Add a Volume, mounted at `/data`** ← do not skip this
-4. Variables:
+2. **Add a Volume, mounted at `/data`** ← do not skip this
+3. Variables:
 
 ```
 LICENCE_DB=/data/licences.json
@@ -39,7 +38,10 @@ LICENCE_FROM_EMAIL=<optional, e.g. keys@yourdomain>
 DOWNLOAD_URL=<where the .exe lives>
 ```
 
-5. Deploy, then check the logs say `N keys on file` rather than refusing to start
+4. Deploy, then check the logs say `N keys on file` rather than refusing to start
+
+No root directory to configure - the Dockerfile at the repo root is found
+automatically, and copies in only the two files this server needs.
 
 ### Render
 
@@ -48,7 +50,7 @@ Same, with a **Disk** mounted at `/data` instead of a Volume.
 ### Anywhere with Docker
 
 ```bash
-docker build -t licence-server server/
+docker build -t licence-server .
 docker run -p 8787:8787 -v licences:/data \
   -e RAZORPAY_WEBHOOK_SECRET=whsec_... licence-server
 ```
