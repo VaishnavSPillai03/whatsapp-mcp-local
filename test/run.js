@@ -222,7 +222,12 @@ check('send_message warns the model about untrusted message content', () => {
   } catch (e) { err = e }
   check('send without a running bridge is refused, not silently dropped', () => {
     assert.ok(err, 'expected an error')
-    assert.match(err.message, /bridge is not running/i)
+    assert.match(err.message, /not running/i)
+  })
+  check('and the refusal tells the user how to fix it in their own terms', () => {
+    // Packaged, a customer has no src/ directory - telling them to run a file
+    // that does not exist reads as a broken product.
+    assert.match(err.message, /node src\/bridge\.js|Start menu/i)
   })
 }
 

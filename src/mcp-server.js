@@ -23,6 +23,17 @@ import { join, dirname } from 'node:path'
 
 import { openDb, DB_PATH } from './db.js'
 import { deleteLocalMessages, deleteLocalChat, purgeLocalDatabase, lastMessagesFor } from './delete.js'
+import { isPackaged } from './paths.js'
+import { BRAND } from './brand.js'
+
+/**
+ * How to start the bridge, said the way this user would do it.
+ * A customer running the packaged app has no src/ directory, and telling
+ * them to run a file that does not exist reads as a broken product.
+ */
+const howToStart = () => isPackaged()
+  ? `open ${BRAND.name} from your Start menu`
+  : 'run: node src/bridge.js'
 
 const db = openDb({ readOnly: true })
 // Written by the bridge while it is running; absent means nothing can be sent.
@@ -279,7 +290,7 @@ registerMutating(
       control = JSON.parse(readFileSync(CONTROL_PATH, 'utf8'))
     } catch {
       throw new Error(
-        'The bridge is not running, so nothing can be sent. Start it with: node src/bridge.js'
+        `The WhatsApp connection is not running, so nothing can be sent. To fix: ${howToStart()}.`
       )
     }
 
@@ -326,7 +337,7 @@ server.registerTool(
     // Without this an unsynced store looks identical to "you have no chats",
     // and the model reports that back as fact.
     if (s.messages === 0) {
-      out.status = 'The local store is empty. The bridge (src/bridge.js) has either not been run and linked to WhatsApp yet, or is still performing its first history sync. This does not mean the user has no messages.'
+      out.status = `The local store is empty. ${BRAND.name} has either not been linked to WhatsApp yet, or is still performing its first history sync, which takes a few minutes. This does NOT mean the user has no messages - do not tell them that. To link or restart: ${howToStart()}.`
     }
     return ok(out)
   }
@@ -358,7 +369,7 @@ async function control (path, body) {
   try {
     cfg = JSON.parse(readFileSync(CONTROL_PATH, 'utf8'))
   } catch {
-    throw new Error('The bridge is not running, so WhatsApp cannot be changed. Start it with: node src/bridge.js')
+    throw new Error(`The WhatsApp connection is not running, so WhatsApp cannot be changed. To fix: ${howToStart()}.`)
   }
   const res = await fetch(`http://127.0.0.1:${cfg.port}${path}`, {
     method: 'POST',
