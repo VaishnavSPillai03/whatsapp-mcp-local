@@ -461,6 +461,14 @@ server.listen(PORT, () => {
   if (!process.env.RAZORPAY_WEBHOOK_SECRET) {
     console.warn('warning: RAZORPAY_WEBHOOK_SECRET is not set - webhooks will be refused')
   }
+  // Without this the success page refuses every customer, and it looks
+  // identical to someone poking at the URL - so say so loudly at boot rather
+  // than leaving it to be discovered by a paying customer.
+  if (!process.env.RAZORPAY_KEY_SECRET) {
+    console.warn('warning: RAZORPAY_KEY_SECRET is not set - the /success page cannot show anyone their key')
+  } else {
+    console.log('ok: RAZORPAY_KEY_SECRET is set - /success can show keys')
+  }
   if (!process.env.RESEND_API_KEY) {
     console.warn('warning: no email provider configured - keys will be logged, not sent')
   }
