@@ -210,9 +210,16 @@ async function handleWebhook (req, res) {
  * The signature in the URL is what makes this safe to serve. Without it the
  * URL would be a guessable way to read other people's keys.
  */
-function successPage (req, res) {
+async function successPage (req, res) {
   const url = new URL(req.url, 'http://localhost')
   const params = Object.fromEntries(url.searchParams)
+
+  // Razorpay POSTs form-encoded fields in the checkout redirect flow and uses
+  // query parameters for payment links. Merge whichever arrived.
+  if (req.method === 'POST') {
+    const raw = await readRaw(req)
+    for (const [k, v] of new URLSearchParams(raw)) params[k] = v
+  }
 
   const page = (title, bodyHtml, status = 200, refresh = 0) => {
     res.writeHead(status, {
@@ -308,7 +315,7 @@ const server = createServer(async (req, res) => {
     return handleWebhook(req, res)
   }
 
-  if (req.url.startsWith('/success') && req.method === 'GET') {
+  if (req.url.startsWith('/success') && (req.method === 'GET' || req.method === 'POST')) {
     return successPage(req, res)
   }
 
